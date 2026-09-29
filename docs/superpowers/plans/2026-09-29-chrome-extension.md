@@ -18,7 +18,7 @@
 - Save immediately after the user's click; do not add a preview dialog.
 - A carousel saves every resolved item in display order.
 - Store author, caption, canonical source URL, media kind, saved date, item status, safe filename, and an optional small thumbnail locally.
-- Never persist or log passwords, cookies, authorization headers, access tokens, signed media URLs, transient media URLs, raw page HTML, usernames, captions, or source URLs.
+- Never persist or log passwords, cookies, authorization headers, access tokens, signed media URLs, transient media URLs, or raw page HTML. Author, caption, and canonical source URL may be persisted in the local library as approved, but must never appear in logs.
 - Do not request `cookies`, history, clipboard, debugger, or `<all_urls>` permissions.
 - Do not bypass login, private-content controls, challenges, rate limits, or anti-automation behavior.
 - Do not crawl profiles, feeds, followers, hashtags, or recommendations in Version 1.
@@ -511,6 +511,7 @@ git commit -m "test: add extension integration and privacy checks"
 - Create: `docs/PRIVACY.md`
 - Create: `README.md`
 - Create: `scripts/package-extension.mjs`
+- Create: `tests/scaffold/package.test.ts`
 - Modify: `package.json`
 - Modify: `package-lock.json`
 
