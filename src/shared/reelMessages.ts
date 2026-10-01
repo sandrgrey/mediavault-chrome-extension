@@ -23,10 +23,15 @@ export function parseReelMessage(input: unknown): ReelMessage | null {
   return null;
 }
 export function senderOwner(sender: chrome.runtime.MessageSender, currentUrl: string, extensionId: string): Result<{ owner: Owner; identity: ReelIdentity }> {
-  const tabId = sender.tab?.id;
-  if (sender.id !== extensionId || sender.frameId !== 0 || typeof tabId !== 'number' || !Number.isInteger(tabId) ||
-    tabId < 0 || !shortString(sender.documentId) || !sender.url) return fail('invalid-message');
+  const checked = senderDocumentOwner(sender, extensionId);
+  if (!checked.ok || !sender.url) return fail('invalid-message');
   const from = reelIdentity(sender.url), current = reelIdentity(currentUrl);
   if (!from.ok || !current.ok || from.value.publicationId !== current.value.publicationId) return fail('publication-changed');
-  return ok({ owner: { tabId, documentId: sender.documentId }, identity: current.value });
+  return ok({ owner: checked.value, identity: current.value });
+}
+export function senderDocumentOwner(sender: chrome.runtime.MessageSender, extensionId: string): Result<Owner> {
+  const tabId = sender.tab?.id;
+  if (sender.id !== extensionId || sender.frameId !== 0 || typeof tabId !== 'number' || !Number.isInteger(tabId) ||
+    tabId < 0 || !shortString(sender.documentId)) return fail('invalid-message');
+  return ok({ tabId, documentId: sender.documentId });
 }

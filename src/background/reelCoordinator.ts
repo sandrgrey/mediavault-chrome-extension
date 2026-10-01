@@ -9,6 +9,7 @@ import type { createOperationQueue } from './operationQueue';
 export type ReelStatus = { state: OperationState; safeToRelease: boolean };
 export type CoordinatorDeps = { operations: OperationRepository; reloads: ReturnType<typeof createReloadRepository>; downloads: DownloadsPort;
   queue: ReturnType<typeof createOperationQueue>; live: Set<string>; recover: () => Promise<Result<void>>;
+  verifyContext: (owner: Owner, identity: ReelIdentity, operationId: string) => Promise<boolean>;
   reloadTab: (tabId: number) => Promise<void>; cancelDownload: (id: number) => Promise<void>; now: () => number };
 export function createReelCoordinator(deps: CoordinatorDeps) {
   const { operations, reloads, downloads, queue, live, recover, now } = deps;
@@ -61,12 +62,24 @@ export function createReelCoordinator(deps: CoordinatorDeps) {
           if (!reclaimed.ok || reclaimed.value?.operationId !== op.id) return fail('needs-review');
           live.add(op.id);
         }
+        const contextValid = () => deps.verifyContext(owner, identity, op.id).catch(() => false);
+        async function abandon() {
+          await operations.requestCancel(op!.id);
+          live.delete(op!.id); await reloads.remove(op!.id);
+          return fail('publication-changed');
+        }
+        if (!await contextValid()) return abandon();
         const attached = await operations.attachReelResult(op.id, owner, identity.sourceUrl, now());
         if (!attached.ok) return attached;
         const pending = await operations.get(op.id);
         if (!pending?.items[0]) return fail('storage-failed');
         const marked = await operations.transitionItem(op.id, 0, 'pending', 'dispatching', {});
         if (!marked.ok) return marked;
+        if (!await contextValid()) {
+          const stopped = await operations.transitionItem(op.id, 0, 'dispatching', 'failed', { errorCode: 'publication-changed' });
+          if (!stopped.ok) return stopped;
+          return abandon();
+        }
         try {
           const id = await downloads.start(blob.blobUrl, pending.items[0].filename);
           const recorded = await operations.transitionItem(op.id, 0, 'dispatching', 'downloading', { downloadId: id });

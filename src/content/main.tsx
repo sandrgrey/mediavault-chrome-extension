@@ -2,10 +2,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import { ReelSaveControl } from './ReelSaveControl';
 import { createReelLifecycle } from './reelLifecycle';
 import { reelIdentity } from '../providers/instagram/reelIdentity';
-import { plain } from '../media/reelProtocol';
+import { plain, shortString } from '../media/reelProtocol';
 
 chrome.runtime.onMessage.addListener((input, sender, reply) => {
   if (sender.id === chrome.runtime.id && plain(input, ['version', 'type']) && input.version === 1 && input.type === 'reel-owner-probe') reply({ alive: true });
+  if (sender.id === chrome.runtime.id && plain(input, ['version', 'type', 'operationId']) && input.version === 1 &&
+    input.type === 'reel-context-probe' && shortString(input.operationId)) reply({ valid: mounted?.controller.isCurrent(input.operationId) ?? false });
 });
 
 let mounted: { key: string; host: HTMLElement; root: Root; controller: ReturnType<typeof createReelLifecycle> } | null = null;

@@ -12,13 +12,13 @@ afterEach(() => db.close());
 const old = { tabId: 1, documentId: 'old' }, owner = { tabId: 1, documentId: 'new' };
 const identity = { publicationId: 'instagram:Ab', sourceIdentity: 'Ab', sourceUrl: 'https://www.instagram.com/reel/Ab/' };
 const ready = (operationId: string) => ({ operationId, blobUrl: 'blob:https://www.instagram.com/12345678-abcd-1234-abcd-123456789abc', size: 100, mime: 'video/mp4' as const });
-function setup() {
+function setup(verifyContext = async () => true) {
   const operations = createOperationRepository(db), reloads = createReloadRepository(db), queue = createOperationQueue(), live = new Set<string>();
   let starts = 0, reloadCount = 0;
   const downloads: DownloadsPort = { start: async () => { starts++; return 7; }, get: async () => ({ id: 7, state: 'complete', filename: 'safe.mp4', errorCode: null }), onChange: () => () => {} };
   const recover = createRecovery(operations, downloads, () => 3000);
   const coordinator = createReelCoordinator({ operations, reloads, queue, live, downloads, recover, now: () => 2000,
-    reloadTab: async () => { reloadCount++; }, cancelDownload: async () => {} });
+    verifyContext, reloadTab: async () => { reloadCount++; }, cancelDownload: async () => {} });
   return { coordinator, operations, downloads, count: () => ({ starts, reloadCount }), recover };
 }
 it('reloads once, transfers document owner, completes one download and persists no blob URL', async () => {
@@ -54,6 +54,17 @@ it('a restarted worker can accept the still-live claimed document without anothe
   expect(await restarted.coordinator.submit(owner, identity, ready(claimed.value.operationId)))
     .toEqual({ ok: true, value: { state: 'completed', safeToRelease: true } });
   expect(restarted.count()).toEqual({ starts: 1, reloadCount: 0 });
+});
+it('rechecks the player immediately before dispatch and cancels without downloading', async () => {
+  let checks = 0;
+  const f = setup(async () => ++checks === 1);
+  await f.coordinator.begin(old, identity, 'req', 'save');
+  const claimed = await f.coordinator.claim(owner, identity);
+  if (!claimed.ok || !claimed.value) throw Error('claim');
+  const id = claimed.value.operationId;
+  expect((await f.coordinator.submit(owner, identity, ready(id))).ok).toBe(false);
+  expect(f.count().starts).toBe(0);
+  expect((await f.coordinator.status(owner, id))).toMatchObject({ ok: true, value: { state: 'cancelled', safeToRelease: true } });
 });
 it('lost download ID is uncertain and repeating submit never dispatches again', async () => {
   const f = setup(); await f.coordinator.begin(old, identity, 'req', 'save');

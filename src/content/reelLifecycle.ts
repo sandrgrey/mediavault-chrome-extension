@@ -13,7 +13,22 @@ export function createReelLifecycle(onChange: (view: SaveView) => void) {
   let state: SaveView = { message: 'Проверка состояния…', busy: true, canCancel: false, redownload: false };
   let operationId: string | null = null, blobUrl: string | null = null, disposed = false, polling = false;
   let controller: AbortController | null = null;
+  let player: HTMLVideoElement | null = null, source = '';
   const identity = reelIdentity(location.href);
+  function visiblePlayers() {
+    return [...document.querySelectorAll('video')].filter(video => {
+      const r = video.getBoundingClientRect();
+      const width = Math.max(0, Math.min(r.right, innerWidth) - Math.max(r.left, 0));
+      const height = Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0));
+      return r.width >= 64 && r.height >= 64 && width * height >= r.width * r.height * 0.75;
+    });
+  }
+  function validContext() {
+    const current = reelIdentity(location.href), visible = visiblePlayers();
+    return !disposed && !controller?.signal.aborted && identity.ok && current.ok &&
+      current.value.publicationId === identity.value.publicationId && player?.isConnected &&
+      player.currentSrc === source && visible.length === 1 && visible[0] === player;
+  }
   const set = (patch: Partial<SaveView>) => { state = { ...state, ...patch }; if (!disposed) onChange(state); };
   async function send<T>(message: ReelMessage): Promise<Result<T>> {
     try { return await chrome.runtime.sendMessage(message) as Result<T>; } catch { return fail('extension-updated'); }
@@ -50,9 +65,15 @@ export function createReelLifecycle(onChange: (view: SaveView) => void) {
       const reply = (event: MessageEvent) => {
         if (event.source !== window || event.origin !== location.origin) return;
         const data = event.data;
-        if (plain(data, ['version', 'type', 'operationId', 'token', 'pair']) && data.version === 1 && data.type === 'ready' &&
+        if (plain(data, ['version', 'type', 'operationId', 'token', 'pair', 'playerSrc']) && data.version === 1 && data.type === 'ready' &&
           data.operationId === session.operationId && data.token === session.token &&
-          plain(data.pair, ['videoUrl', 'audioUrl']) && mediaUrl(data.pair.videoUrl) && mediaUrl(data.pair.audioUrl)) finish(data.pair as TrackPair);
+          plain(data.pair, ['videoUrl', 'audioUrl']) && mediaUrl(data.pair.videoUrl) && mediaUrl(data.pair.audioUrl)) {
+          const visible = visiblePlayers();
+          if (visible.length !== 1 || !visible[0].currentSrc || visible[0].currentSrc !== data.playerSrc ||
+            (player && (player !== visible[0] || source !== data.playerSrc))) { finish(); return; }
+          player = visible[0]; source = player.currentSrc;
+          finish(data.pair as TrackPair);
+        }
         else if (plain(data, ['version', 'type', 'operationId', 'token', 'error']) && data.version === 1 && data.type === 'failed' &&
           data.operationId === session.operationId && data.token === session.token) finish();
       };
@@ -71,13 +92,13 @@ export function createReelLifecycle(onChange: (view: SaveView) => void) {
     set({ busy: true, canCancel: true, message: 'Сбор дорожек…' });
     try {
       const pair = await capture(session, signal);
-      if (signal.aborted) throw Error('cancelled');
+      if (signal.aborted || !validContext()) throw Error('context-changed');
       set({ message: 'Получение видео и звука…' });
       const tracks = await fetchTrackPair(pair, signal);
-      if (!tracks.ok) throw Error('fetch-failed');
+      if (!tracks.ok || !validContext()) throw Error('fetch-failed');
       set({ message: 'Объединение видео и звука…' });
       const merged = await remuxTracks(tracks.value.video, tracks.value.audio, { signal, onProgress: value => set({ message: `Объединение: ${Math.round(value * 100)}%` }) });
-      if (!merged.ok || signal.aborted) throw Error('remux-failed');
+      if (!merged.ok || signal.aborted || !validContext()) throw Error('remux-failed');
       const current = reelIdentity(location.href);
       if (!identity.ok || !current.ok || current.value.publicationId !== identity.value.publicationId) throw Error('route-changed');
       blobUrl = URL.createObjectURL(merged.value); submitted = true;
@@ -100,15 +121,11 @@ export function createReelLifecycle(onChange: (view: SaveView) => void) {
     const result = await send<ReelStatus>({ version: 1, type: 'reel-cancel', operationId });
     if (result.ok) reflect(result.value);
   }
-  let player: HTMLVideoElement | null = null, source = '';
   const timer = setInterval(() => {
     if (controller && !controller.signal.aborted) {
       const current = reelIdentity(location.href);
       if (!identity.ok || !current.ok || identity.value.publicationId !== current.value.publicationId) { void cancel(); return; }
-      const visible = [...document.querySelectorAll('video')].filter(video => {
-        const r = video.getBoundingClientRect();
-        return r.width >= 64 && r.height >= 64 && Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0)) >= r.height * 0.75;
-      });
+      const visible = visiblePlayers();
       if (!player && visible.length === 1 && visible[0].currentSrc) { player = visible[0]; source = player.currentSrc; }
       else if (player && (visible.length !== 1 || visible[0] !== player || player.currentSrc !== source)) void cancel();
     }
@@ -123,6 +140,7 @@ export function createReelLifecycle(onChange: (view: SaveView) => void) {
   });
   return {
     snapshot: () => state,
+    isCurrent: (id: string) => operationId === id && Boolean(validContext()),
     async save() {
       if (state.busy) return;
       set({ busy: true, message: 'Перезагрузка страницы…' });

@@ -86,7 +86,8 @@ export function installPageBridge(): { dispose(): void } {
     if (result.ok) {
       const session = active.session;
       stop();
-      window.postMessage({ version: 1, type: 'ready', operationId: session.operationId, token: session.token, pair: result.value }, location.origin);
+      window.postMessage({ version: 1, type: 'ready', operationId: session.operationId, token: session.token,
+        pair: result.value, playerSrc: candidates[0].currentSrc }, location.origin);
     } else if (result.error !== 'unavailable') stop(result.error);
   }
   const interval = setInterval(check, 100);

@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { BlobSource, Input, MP4 } from 'mediabunny';
 
-for (const scenario of ['success', 'cancel', 'navigate', 'restart'] as const) test(`production Save: ${scenario}`, async ({ playwright }, testInfo) => {
+for (const scenario of ['success', 'cancel', 'navigate', 'spa-away', 'restart'] as const) test(`production Save: ${scenario}`, async ({ playwright }, testInfo) => {
   const extension = resolve('dist');
   const context = await playwright.chromium.launchPersistentContext('', {
     channel: 'chromium', headless: true, acceptDownloads: true, downloadsPath: testInfo.outputPath('downloads'),
@@ -38,8 +38,9 @@ for (const scenario of ['success', 'cancel', 'navigate', 'restart'] as const) te
         expect(await inspect.evaluate(async () => (await chrome.downloads.search({})).length)).toBe(0);
         return;
       }
-      if (scenario === 'navigate') {
-        await page.goto('https://www.instagram.com/other/');
+      if (scenario === 'navigate' || scenario === 'spa-away') {
+        if (scenario === 'navigate') await page.goto('https://www.instagram.com/other/');
+        else await page.evaluate(() => history.pushState({}, '', '/explore/'));
         await expect.poll(() => inspect.evaluate(() => new Promise<string>((resolve, reject) => {
           const request = indexedDB.open('mediavault');
           request.onerror = () => reject(Error('database'));
