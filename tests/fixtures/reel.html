@@ -1,0 +1,16 @@
+<!doctype html><html><body><video muted style="width:300px;height:300px"></video><script>
+setTimeout(async () => {
+  history.replaceState({}, '', location.pathname + '?fixture=spa');
+  const video = document.querySelector('video'), mse = new MediaSource();
+  video.src = URL.createObjectURL(mse);
+  await new Promise(done => mse.addEventListener('sourceopen', done, { once: true }));
+  const tracks = [['v', 'video/mp4; codecs="vp09.00.10.08"'], ['a', 'audio/mp4; codecs="mp4a.40.2"']]
+    .map(([path, mime]) => ({ path, source: mse.addSourceBuffer(mime) }));
+  for (const { path, source } of tracks) {
+    const body = await (await fetch('https://scontent-lax7-1.cdninstagram.com/' + path + '.mp4?sig=fixture')).arrayBuffer();
+    const done = new Promise((resolve, reject) => { source.addEventListener('updateend', resolve, { once: true }); source.addEventListener('error', reject, { once: true }); });
+    source.appendBuffer(body); await done;
+  }
+  mse.endOfStream(); video.play().catch(() => {});
+}, 500);
+</script></body></html>
