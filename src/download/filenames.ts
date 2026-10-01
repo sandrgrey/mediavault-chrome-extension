@@ -23,7 +23,7 @@ export function publicationKey(sourceUrl: string): Result<string> {
 export function mediaItemKey(publicationId: string, item: ResolvedMediaItem): string {
   return `${publicationId}:${item.stableItemId ? `id:${item.stableItemId}` : `position:${item.index}`}`;
 }
-export function buildDownloadPath(publication: PublicationMetadata, item: ResolvedMediaItem): string {
+export function buildDownloadPath(publication: PublicationMetadata, item: Pick<ResolvedMediaItem, 'index' | 'mediaType' | 'extension'>): string {
   if (!Number.isInteger(item.index) || item.index < 0 || item.index >= 50) throw new RangeError('invalid-media-index');
   const validExtension = item.mediaType === 'video' ? item.extension === 'mp4' : ['jpg', 'png', 'webp'].includes(item.extension);
   if (!validExtension) throw new Error('unsupported-media-format');

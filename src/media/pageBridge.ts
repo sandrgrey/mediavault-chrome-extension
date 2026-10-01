@@ -9,7 +9,7 @@ export function installPageBridge(): { dispose(): void } {
   const sources = new WeakMap<MediaSource, Track[]>(), buffers = new WeakMap<SourceBuffer, Track>();
   const blobs = new Map<string, WeakRef<MediaSource>>();
   let serial = 0;
-  let active: { session: ReelSession; identity: string; pending: number; capture: ReturnType<typeof createAssociationSession> } | null = null;
+  let active: { session: ReelSession; identity: string; capture: ReturnType<typeof createAssociationSession> } | null = null;
   const nativeFetch = window.fetch, nativeCreate = URL.createObjectURL, nativeRevoke = URL.revokeObjectURL;
   const nativeAdd = MediaSource.prototype.addSourceBuffer, nativeAppend = SourceBuffer.prototype.appendBuffer;
   function stop(error?: MediaVaultErrorCode) {
@@ -48,12 +48,11 @@ export function installPageBridge(): { dispose(): void } {
     const current = active;
     const promise = nativeFetch.apply(this, args);
     if (current) {
-      current.pending++;
       void promise.then(async response => {
       if (active !== current || !mediaUrl(response.url) || !response.ok) return;
       const clone = response.clone();
         if (clone.body) await current.capture.observeResponse(response.url, clone.body);
-      }).catch(() => undefined).finally(() => { current.pending--; });
+      }).catch(() => undefined);
     }
     return promise;
   };
@@ -66,7 +65,7 @@ export function installPageBridge(): { dispose(): void } {
     if (active) return;
     const identity = reelIdentity(location.href);
     if (!identity.ok || data.session.deadlineMs <= Date.now()) return;
-    active = { session: data.session, identity: identity.value.publicationId, pending: 0, capture: createAssociationSession(data.session) };
+    active = { session: data.session, identity: identity.value.publicationId, capture: createAssociationSession(data.session) };
   }
   window.addEventListener('message', message);
   function check() {
@@ -85,7 +84,6 @@ export function installPageBridge(): { dispose(): void } {
     const video = tracks.filter(track => track.mime.startsWith('video/')), audio = tracks.filter(track => track.mime.startsWith('audio/'));
     const result = active.capture.resolve(video.length === 1 ? video[0].key : '', audio.length === 1 ? audio[0].key : '');
     if (result.ok) {
-      if (active.pending) return;
       const session = active.session;
       stop();
       window.postMessage({ version: 1, type: 'ready', operationId: session.operationId, token: session.token, pair: result.value }, location.origin);

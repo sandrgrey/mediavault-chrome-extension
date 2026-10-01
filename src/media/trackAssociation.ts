@@ -1,7 +1,7 @@
 import type { ReelSession } from '../storage/reloadIntents';
 import { MAX_CAPTURE_BYTES, mediaUrl, type TrackPair } from './reelProtocol';
 import { fail, ok, type Result, type MediaVaultErrorCode } from '../shared/result';
-type Body = { key: string; url: string; offset: number; chunks: Uint8Array[] };
+type Body = { key: string; url: string; offset: number; complete: boolean; chunks: Uint8Array[] };
 // KMP walks fragmented response data without allocating a second full body.
 function find(chunks: Uint8Array[], sample: Uint8Array): number {
   const prefix = new Uint32Array(sample.length);
@@ -40,13 +40,14 @@ export function createAssociationSession(session: ReelSession) {
       if (!url || stopped) { void stream.cancel().catch(() => undefined); return; }
       const offset = Number(new URL(value).searchParams.get('bytestart') ?? 0);
       if (!Number.isSafeInteger(offset) || offset < 0 || bodies.length >= 128) { end('unavailable'); void stream.cancel().catch(() => undefined); return; }
-      const body: Body = { key: url.origin + url.pathname, url: url.href, offset, chunks: [] };
+      const body: Body = { key: url.origin + url.pathname, url: url.href, offset, complete: false, chunks: [] };
       bodies.push(body);
       const reader = stream.getReader(); readers.add(reader);
       try {
         while (!stopped) {
           const { done, value: bytes } = await reader.read();
-          if (done || stopped) break;
+          if (done) { body.complete = true; break; }
+          if (stopped) break;
           if (!reserve(bytes.byteLength)) break;
           body.chunks.push(bytes.slice());
         }
@@ -71,7 +72,9 @@ export function createAssociationSession(session: ReelSession) {
           const local = find(body.chunks, sample); if (local < 0) continue;
           const start = body.offset + local, finish = start + sample.length;
           const candidate = candidates.get(body.key) ?? { body, ranges: [] };
-          if (candidate.ranges.every(([a, b]) => finish <= a || start >= b)) candidate.ranges.push([start, finish]);
+          if (body.complete && candidate.ranges.every(([a, b]) => finish <= a || start >= b)) {
+            candidate.ranges.push([start, finish]); candidate.body = body;
+          }
           candidates.set(body.key, candidate);
         }
         // Even a partial match to another resource makes the identification ambiguous.

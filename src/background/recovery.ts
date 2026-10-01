@@ -2,14 +2,17 @@ import type { OperationRepository } from '../storage/operations';
 import type { DownloadsPort } from '../download/chromeDownloads';
 import type { ItemState, OperationState } from '../domain/models';
 import { fail, ok, type Result } from '../shared/result';
+import { createOperationQueue } from './operationQueue';
 
-export function createRecovery(operations: OperationRepository, downloads: DownloadsPort, now = Date.now) {
+export function createRecovery(operations: OperationRepository, downloads: DownloadsPort, now = Date.now,
+  shared: { queue: ReturnType<typeof createOperationQueue>; live: Set<string> } = { queue: createOperationQueue(), live: new Set() }) {
   // Serialize calls; a later download event must perform a fresh pass, not reuse
   // an earlier search snapshot. This function never has access to media URLs.
-  let queue: Promise<Result<void>> = Promise.resolve(ok(undefined));
   async function recover(): Promise<Result<void>> {
     try {
       for (const operation of await operations.findRecoverable()) {
+        if (shared.live.has(operation.id) && operation.collectDeadlineMs >= now()) continue;
+        shared.live.delete(operation.id);
         if (operation.state === 'collecting') {
           if (operation.collectDeadlineMs < now()) {
             const result = await operations.settle(operation.id, 'needs-user', new Date(now()).toISOString());
@@ -63,5 +66,5 @@ export function createRecovery(operations: OperationRepository, downloads: Downl
       return ok(undefined);
     } catch { return fail('storage-failed'); }
   }
-  return (): Promise<Result<void>> => { queue = queue.then(recover); return queue; };
+  return (): Promise<Result<void>> => shared.queue.run(recover);
 }

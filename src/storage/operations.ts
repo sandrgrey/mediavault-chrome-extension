@@ -6,6 +6,7 @@ import { validResolved } from '../domain/validation';
 import { buildDownloadPath } from '../download/filenames';
 import { fail, isErrorCode, ok, type Result } from '../shared/result';
 import type { MediaVaultDatabase, MediaVaultSchema } from './database';
+import { reelIdentity } from '../providers/instagram/reelIdentity';
 
 const stores = ['operations', 'publications', 'activePublications'] as const;
 type WriteTransaction = IDBPTransaction<MediaVaultSchema, typeof stores, 'readwrite'>;
@@ -44,6 +45,25 @@ export function createOperationRepository(db: MediaVaultDatabase) {
     else if (record.error !== 'storage-empty-record') throw new Error('invalid-projection');
   }
   return {
+    async attachReelResult(id: string, owner: BeginInput['owner'], sourceUrl: string, nowMs: number): Promise<Result<void>> {
+      const identity = reelIdentity(sourceUrl);
+      if (!identity.ok || !Number.isFinite(nowMs)) return fail('invalid-message');
+      return write(async tx => {
+        const ops = tx.objectStore('operations'), operation = await ops.get(id);
+        if (!operation || operation.superseded || !sameOwner(operation.owner, owner) ||
+          operation.publicationId !== identity.value.publicationId || operation.state !== 'collecting') return fail('invalid-message');
+        if (operation.cancelRequested) return fail('cancelled');
+        if (nowMs > operation.collectDeadlineMs) return fail('operation-expired');
+        if (operation.mode === 'retry') return fail('identity-unavailable');
+        const metadata = { id: identity.value.publicationId, provider: 'instagram' as const,
+          sourceIdentity: identity.value.sourceIdentity, sourceUrl: identity.value.sourceUrl, author: null, caption: null, kind: 'reel' as const };
+        operation.metadata = metadata; operation.collectionStatus = 'complete'; operation.expectedCount = 1;
+        operation.items = [{ index: 0, stableItemId: null, mediaType: 'video', status: 'pending', downloadId: null, errorCode: null,
+          filename: buildDownloadPath(metadata, { index: 0, mediaType: 'video', extension: 'mp4' }) }];
+        operation.state = 'downloading'; operation.updatedAt = new Date(nowMs).toISOString();
+        await ops.put(operation); return ok(undefined);
+      });
+    },
     async begin(input: BeginInput): Promise<Result<BeginOutcome>> {
       if (!/^[A-Za-z0-9_-]{1,128}$/.test(input.requestId) || !/^instagram:[A-Za-z0-9_-]{1,64}$/.test(input.publicationId) ||
         !['save', 'retry', 'redownload'].includes(input.mode) || !Number.isFinite(input.nowMs) || input.nowMs < 0 ||
@@ -124,7 +144,7 @@ export function createOperationRepository(db: MediaVaultDatabase) {
         const downloadId = patch.downloadId !== undefined ? patch.downloadId : item.downloadId;
         if ((to === 'downloading' || to === 'completed') && downloadId === null) return fail('invalid-message');
         item.status = to; item.downloadId = downloadId;
-        item.errorCode = to === 'completed' ? null : (patch.errorCode ?? item.errorCode);
+        item.errorCode = to === 'completed' ? null : (patch.errorCode !== undefined ? patch.errorCode : item.errorCode);
         operation.updatedAt = new Date().toISOString();
         await ops.put(operation); await project(tx, operation);
         return ok(undefined);
@@ -149,6 +169,7 @@ export function createOperationRepository(db: MediaVaultDatabase) {
       return write(async tx => {
         const ops = tx.objectStore('operations'), operation = await ops.get(id);
         if (!operation || operation.superseded) return fail('invalid-message');
+        if (operation.cancelRequested && state !== 'completed' && !activeStates.has(state)) state = 'cancelled';
         if (state === 'completed' && (operation.collectionStatus !== 'complete' ||
           operation.expectedCount !== operation.items.length || !operation.items.length ||
           operation.items.some(item => item.status !== 'completed'))) return fail('invalid-message');

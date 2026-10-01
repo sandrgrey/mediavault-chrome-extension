@@ -1,0 +1,31 @@
+import { afterEach, expect, it } from 'vitest';
+import { openMediaVaultDatabase, type MediaVaultDatabase } from '../../src/storage/database';
+import { createOperationRepository } from '../../src/storage/operations';
+let db: MediaVaultDatabase;
+afterEach(() => db?.close());
+it('attaches one metadata-only Reel without persisting a temporary URL and clears explicit error null', async () => {
+  db = await openMediaVaultDatabase(crypto.randomUUID());
+  const repo = createOperationRepository(db), owner = { tabId: 1, documentId: 'doc' };
+  const begun = await repo.begin({ owner, publicationId: 'instagram:Ab', requestId: 'req', mode: 'save', nowMs: 1000 });
+  if (!begun.ok || begun.value.kind !== 'accepted') throw Error('begin');
+  const id = begun.value.operationId;
+  expect(await repo.attachReelResult(id, owner, 'https://www.instagram.com/reel/Ab/', 2000)).toEqual({ ok: true, value: undefined });
+  const op = await repo.get(id);
+  expect(op?.items).toHaveLength(1);
+  expect(op?.items[0]).toMatchObject({ index: 0, stableItemId: null, mediaType: 'video', status: 'pending' });
+  expect(JSON.stringify(op)).not.toMatch(/blob:|downloadUrl/);
+  await repo.transitionItem(id, 0, 'pending', 'dispatching', {});
+  await repo.transitionItem(id, 0, 'dispatching', 'uncertain', { errorCode: 'needs-review' });
+  await repo.transitionItem(id, 0, 'uncertain', 'downloading', { downloadId: 2, errorCode: null });
+  expect((await repo.get(id))?.items[0].errorCode).toBeNull();
+});
+it('does not replace concurrent cancellation with stale needs-user settlement', async () => {
+  db = await openMediaVaultDatabase(crypto.randomUUID());
+  const repo = createOperationRepository(db), owner = { tabId: 1, documentId: 'doc' };
+  const begun = await repo.begin({ owner, publicationId: 'instagram:Ab', requestId: 'req', mode: 'save', nowMs: 1000 });
+  if (!begun.ok || begun.value.kind !== 'accepted') throw Error('begin');
+  const id = begun.value.operationId;
+  await repo.requestCancel(id);
+  await repo.settle(id, 'needs-user', new Date(3000).toISOString());
+  expect((await repo.get(id))?.state).toBe('cancelled');
+});

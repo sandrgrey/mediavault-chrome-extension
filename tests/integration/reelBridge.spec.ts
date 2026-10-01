@@ -9,7 +9,10 @@ test('MAIN bridge captures only when activated and associates the actual MSE pla
     outDir: dir, lib: { entry: resolve('src/media/bridgeMain.ts'), name: 'Bridge', formats: ['iife'], fileName: () => 'bridge.js' },
   } });
   const context = await playwright.chromium.launchPersistentContext('', { channel: 'chromium', headless: true });
+  let releaseLongPoll = () => {};
+  const longPoll = new Promise<void>(resolve => { releaseLongPoll = resolve; });
   try {
+    await context.route('https://fixture.invalid/long-poll', async route => { await longPoll; await route.abort(); });
     await context.route('https://www.instagram.com/**', route => route.fulfill({ contentType: 'text/html', body: '<video muted style="width:300px;height:300px"></video>' }));
     await context.route('https://scontent-lax7-1.cdninstagram.com/**', async route => {
       const name = new URL(route.request().url()).pathname === '/v.mp4' ? 'video' : 'audio';
@@ -41,6 +44,7 @@ test('MAIN bridge captures only when activated and associates the actual MSE pla
     await play();
     expect(await page.locator('body').getAttribute('data-clones')).toBe('0');
     await page.evaluate(() => window.postMessage({ version: 1, type: 'activate', session: { operationId: 'op', token: 'token', deadlineMs: Date.now() + 10000 } }, location.origin));
+    await page.evaluate(() => { void fetch('https://fixture.invalid/long-poll').catch(() => {}); });
     await play();
     await expect.poll(async () => JSON.parse(await page.locator('body').getAttribute('data-reply') ?? '{}')).toMatchObject({
       version: 1, type: 'ready', operationId: 'op', pair: {
@@ -61,5 +65,5 @@ test('MAIN bridge captures only when activated and associates the actual MSE pla
     await page.evaluate(() => window.postMessage({ version: 1, type: 'activate', session: { operationId: 'route-op', token: 'token', deadlineMs: Date.now() + 10000 } }, location.origin));
     await page.evaluate(() => history.pushState({}, '', '/reel/Other/'));
     await expect.poll(async () => JSON.parse(await page.locator('body').getAttribute('data-reply') ?? '{}')).toMatchObject({ type: 'failed', operationId: 'route-op', error: 'publication-changed' });
-  } finally { await context.close(); }
+  } finally { releaseLongPoll(); await context.close(); }
 });

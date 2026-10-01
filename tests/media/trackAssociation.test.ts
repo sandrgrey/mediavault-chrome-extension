@@ -33,6 +33,15 @@ it('cancels never-ending capture without awaiting a hanging cancel promise', asy
   session.dispose(); await pending;
   expect(cancelled).toBe(true);
 });
+it('does not declare a resource matched until its observed response has finished', async () => {
+  const session = make(), v = bytes(1), a = bytes(2);
+  session.observeAppend('v', v); session.observeAppend('a', a);
+  await session.observeResponse(url('a'), stream(a));
+  const pending = session.observeResponse(url('v'), new ReadableStream({ start(c) { c.enqueue(v); } }));
+  await Promise.resolve();
+  expect(session.resolve('v', 'a').ok).toBe(false);
+  session.dispose(); await pending;
+});
 it('enforces total byte budget and clears references on timeout', async () => {
   vi.useFakeTimers();
   try {
@@ -45,4 +54,3 @@ it('enforces total byte budget and clears references on timeout', async () => {
     session.dispose(); expiring.dispose();
   } finally { vi.useRealTimers(); }
 });
-
