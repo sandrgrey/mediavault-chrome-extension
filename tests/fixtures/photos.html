@@ -1,0 +1,10 @@
+<!doctype html><html><meta charset="utf-8"><body>
+<section id="post"><div style="overflow-x:auto;overflow-y:hidden;width:300px;height:200px;position:relative"><ul style="position:relative;width:1px;height:200px;margin:0;padding:0;list-style:none"></ul></div>
+<button aria-label="Назад">Назад</button><button aria-label="Далее">Далее</button></section>
+<script>
+const list=document.querySelector('ul'), back=document.querySelectorAll('button')[0], next=document.querySelectorAll('button')[1];
+let index=2;
+list.innerHTML='<li style="width:1px;transform:translateX(1199px)"></li>'+[0,1,2,3].map(i=>`<li style="position:absolute;left:0;top:0;width:300px;height:200px;transform:translateX(${300*i}px)"><img width="300" height="200" src="https://scontent-lax3-2.cdninstagram.com/photo${i}.png"></li>`).join('');
+function render(){list.style.left=(-index*300)+'px';history.replaceState({},'',location.pathname+'?img_index='+(index+1));back.hidden=index===0;next.hidden=index===3;}
+back.onclick=()=>{index--;render()};next.onclick=()=>{index++;render()};render();
+</script></body></html>

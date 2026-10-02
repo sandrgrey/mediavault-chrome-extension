@@ -8,6 +8,10 @@ import { createReelCoordinator } from './reelCoordinator';
 import { parseReelMessage, senderOwner, senderDocumentOwner } from '../shared/reelMessages';
 import { reelIdentity } from '../providers/instagram/reelIdentity';
 import { fail } from '../shared/result';
+import { createPhotoCoordinator, validPhotos, type PhotoBlob } from './photoCoordinator';
+import { postIdentity } from '../providers/instagram/photos';
+import { plain, shortString } from '../media/reelProtocol';
+import type { ResolvedPublication } from '../domain/models';
 
 const downloads = createChromeDownloads();
 async function createRuntime() {
@@ -24,7 +28,15 @@ async function createRuntime() {
       } catch { return false; }
     },
     reloadTab: id => chrome.tabs.reload(id), cancelDownload: id => chrome.downloads.cancel(id) });
-  return { coordinator, recover, operations, live };
+  const photos = createPhotoCoordinator({ operations, downloads, queue, live, verify: async (owner, sourceUrl, operationId) => {
+    try {
+      const tab = await chrome.tabs.get(owner.tabId), wanted = postIdentity(sourceUrl), actual = postIdentity(tab.url ?? '');
+      if (!wanted.ok || !actual.ok || wanted.value.publicationId !== actual.value.publicationId) return false;
+      const response = await chrome.tabs.sendMessage(owner.tabId, { version: 1, type: 'photo-context-probe', operationId }, { documentId: owner.documentId });
+      return response?.valid === true;
+    } catch { return false; }
+  } });
+  return { coordinator, photos, recover, operations, live };
 }
 let runtime: Promise<Awaited<ReturnType<typeof createRuntime>>> | undefined;
 function ready() {
@@ -34,6 +46,24 @@ function ready() {
 async function recover() { try { await (await ready()).recover(); } catch { /* no raw browser data in logs */ } }
 downloads.onChange(() => { void recover(); });
 chrome.runtime.onMessage.addListener((input, sender, reply) => {
+  if (input?.type === 'photo-begin' || input?.type === 'photo-submit') {
+    void (async () => {
+      try {
+        const owner = senderDocumentOwner(sender, chrome.runtime.id);
+        if (!owner.ok || input.version !== 1 || !sender.url) { reply(fail('invalid-message')); return; }
+        const from = postIdentity(sender.url), tab = await chrome.tabs.get(owner.value.tabId), now = postIdentity(tab.url ?? '');
+        if (!from.ok || !now.ok || from.value.publicationId !== now.value.publicationId) { reply(fail('publication-changed')); return; }
+        const runtime = await ready();
+        if (input.type === 'photo-begin' && plain(input, ['version', 'type', 'requestId', 'mode']) && shortString(input.requestId) &&
+          (input.mode === 'save' || input.mode === 'redownload')) reply(await runtime.photos.begin(owner.value, now.value.sourceUrl, input.requestId, input.mode));
+        else if (input.type === 'photo-submit' && plain(input, ['version', 'type', 'operationId', 'publication', 'blobs']) && shortString(input.operationId) &&
+          validPhotos(input.publication as ResolvedPublication, input.blobs as PhotoBlob[]) && (input.publication as ResolvedPublication).id === now.value.publicationId)
+          reply(await runtime.photos.submit(owner.value, input.operationId, input.publication as ResolvedPublication, input.blobs as PhotoBlob[]));
+        else reply(fail('invalid-message'));
+      } catch { reply(fail('storage-failed')); }
+    })();
+    return true;
+  }
   const message = parseReelMessage(input);
   if (!message) { reply(fail('invalid-message')); return; }
   void (async () => {

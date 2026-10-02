@@ -3,17 +3,19 @@ import { ReelSaveControl } from './ReelSaveControl';
 import { createReelLifecycle } from './reelLifecycle';
 import { reelIdentity } from '../providers/instagram/reelIdentity';
 import { plain, shortString } from '../media/reelProtocol';
+import { postIdentity } from '../providers/instagram/photos';
+import { createPhotoLifecycle } from './photoLifecycle';
 
 chrome.runtime.onMessage.addListener((input, sender, reply) => {
   if (sender.id === chrome.runtime.id && plain(input, ['version', 'type']) && input.version === 1 && input.type === 'reel-owner-probe') reply({ alive: true });
   if (sender.id === chrome.runtime.id && plain(input, ['version', 'type', 'operationId']) && input.version === 1 &&
-    input.type === 'reel-context-probe' && shortString(input.operationId)) reply({ valid: mounted?.controller.isCurrent(input.operationId) ?? false });
+    ['reel-context-probe', 'photo-context-probe'].includes(String(input.type)) && shortString(input.operationId)) reply({ valid: mounted?.controller.isCurrent(input.operationId) ?? false });
 });
 
-let mounted: { key: string; host: HTMLElement; root: Root; controller: ReturnType<typeof createReelLifecycle> } | null = null;
+let mounted: { key: string; host: HTMLElement; root: Root; controller: ReturnType<typeof createReelLifecycle> | ReturnType<typeof createPhotoLifecycle> } | null = null;
 function reconcile() {
   if (!document.body) return;
-  const identity = reelIdentity(location.href), key = identity.ok ? identity.value.publicationId : '';
+  const post = postIdentity(location.href), identity = post.ok ? post : reelIdentity(location.href), key = identity.ok ? `${post.ok ? 'post' : 'reel'}:${identity.value.publicationId}` : '';
   if (mounted && (mounted.key !== key || !mounted.host.isConnected)) {
     mounted.controller.dispose(); mounted.root.unmount(); mounted.host.remove(); mounted = null;
   }
@@ -25,8 +27,8 @@ function reconcile() {
   style.textContent = ':host{all:initial}section{font:13px/1.4 system-ui;color:#eee;background:#202126;border:1px solid #555;border-radius:12px;padding:14px;max-width:260px;box-shadow:0 4px 20px #0005}p{margin:8px 0}button{font:inherit;cursor:pointer;padding:7px 12px;border-radius:6px;border:0;margin-right:6px}button:disabled{opacity:.5;cursor:default}';
   shadow.append(style, container); document.body.append(host);
   const root = createRoot(container);
-  const render = () => root.render(<ReelSaveControl {...controller.snapshot()} save={() => { void controller.save(); }} cancel={() => { void controller.cancel(); }} />);
-  const controller = createReelLifecycle(render);
+  const render = () => root.render(<ReelSaveControl {...controller.snapshot()} photos={post.ok} save={() => { void controller.save(); }} cancel={() => { void controller.cancel(); }} />);
+  const controller = post.ok ? createPhotoLifecycle(render) : createReelLifecycle(render);
   mounted = { key, host, root, controller }; render();
 }
 let pending: ReturnType<typeof setTimeout> | undefined;
