@@ -5,6 +5,13 @@ const url = (name: string) => `https://scontent-lax7-1.cdninstagram.com/${name}.
 const bytes = (seed: number) => { let n = seed; return Uint8Array.from({ length: 6000 }, () => { n = (n * 1664525 + 1013904223) >>> 0; return n >>> 24; }); };
 const stream = (bytes: Uint8Array) => new ReadableStream<Uint8Array>({ start(c) { c.enqueue(bytes); c.close(); } });
 const make = () => createAssociationSession({ operationId: 'op', token: 'token', deadlineMs: Date.now() + 120000 });
+it('requires explicit silent mode to resolve one byte-matched video', async () => {
+  const s = make(), v = bytes(1);
+  s.observeAppend('v', v); await s.observeResponse(url('v'), stream(v));
+  expect(s.resolve('v', '').ok).toBe(false);
+  expect(s.resolve('v', '', true)).toEqual({ ok: true, value: { videoUrl: url('v'), audioUrl: null } });
+  s.dispose();
+});
 it('associates two disjoint append chunks with reordered range responses, ignoring a neighboring track', async () => {
   const session = make(), v = bytes(1), a = bytes(2), other = bytes(3);
   session.observeAppend('video', v.subarray(0, 2048)); session.observeAppend('video', v.subarray(2048, 4096));

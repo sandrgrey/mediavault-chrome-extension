@@ -64,7 +64,7 @@ export function createAssociationSession(session: ReelSession) {
         list.push(chunk.slice()); appends.set(track, list);
       }
     },
-    resolve(video: string, audio: string): Result<TrackPair> {
+    resolve(video: string, audio: string, silent = false): Result<TrackPair> {
       if (stopped) return fail(stopped);
       const match = (track: string): Body | null => {
         const candidates = new Map<string, { body: Body; ranges: [number, number][] }>();
@@ -83,6 +83,7 @@ export function createAssociationSession(session: ReelSession) {
         return candidate.ranges.length >= 2 ? candidate.body : null;
       };
       const v = match(video), a = match(audio);
+      if (silent && !audio && v) return ok({ videoUrl: v.url, audioUrl: null });
       return v && a && v.key !== a.key ? ok({ videoUrl: v.url, audioUrl: a.url }) : fail('unavailable');
     },
     dispose(): void { end('cancelled'); },

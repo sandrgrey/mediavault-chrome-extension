@@ -1,13 +1,13 @@
 import { fail, ok, type Result } from '../shared/result';
 import { MAX_TRACK_BYTES, mediaUrl, type TrackPair } from './reelProtocol';
-export async function fetchTrackPair(pair: TrackPair, signal: AbortSignal): Promise<Result<{ video: Blob; audio: Blob }>> {
+export async function fetchTrackPair(pair: TrackPair, signal: AbortSignal): Promise<Result<{ video: Blob; audio: Blob | null }>> {
   if (signal.aborted) return fail('cancelled');
   const videoUrl = mediaUrl(pair.videoUrl), audioUrl = mediaUrl(pair.audioUrl);
-  if (!videoUrl || !audioUrl || videoUrl.origin + videoUrl.pathname === audioUrl.origin + audioUrl.pathname) return fail('unavailable');
+  if (!videoUrl || (pair.audioUrl !== null && !audioUrl) || (audioUrl && videoUrl.origin + videoUrl.pathname === audioUrl.origin + audioUrl.pathname)) return fail('unavailable');
   let total = 0;
   const blobs: Blob[] = [];
   try {
-    for (const url of [videoUrl, audioUrl]) {
+    for (const url of (audioUrl ? [videoUrl, audioUrl] : [videoUrl])) {
       if (signal.aborted) return fail('cancelled');
       const response = await fetch(url.href, { credentials: 'omit', signal, redirect: 'error' });
       if (response.status !== 200 || !response.body || response.headers.has('Content-Range')) return fail('unavailable');
@@ -30,6 +30,6 @@ export async function fetchTrackPair(pair: TrackPair, signal: AbortSignal): Prom
       if (blob.size < 16 || String.fromCharCode(...magic) !== 'ftyp') return fail('unavailable');
       blobs.push(blob);
     }
-    return ok({ video: blobs[0], audio: blobs[1] });
+    return ok({ video: blobs[0], audio: blobs[1] ?? null });
   } catch { return fail(signal.aborted ? 'cancelled' : 'unavailable'); }
 }

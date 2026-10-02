@@ -1,5 +1,5 @@
 import type { ReelSession } from '../storage/reloadIntents';
-export type TrackPair = { videoUrl: string; audioUrl: string };
+export type TrackPair = { videoUrl: string; audioUrl: string | null };
 export type BridgeMessage = { version: 1; type: 'activate'; session: ReelSession } | { version: 1; type: 'cancel'; operationId: string };
 export const MAX_CAPTURE_BYTES = 16 * 1024 * 1024;
 export const MAX_TRACK_BYTES = 64 * 1024 * 1024;

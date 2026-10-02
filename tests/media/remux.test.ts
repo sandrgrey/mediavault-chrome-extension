@@ -17,6 +17,16 @@ async function inspect(blob: Blob) {
 }
 
 describe('browser MP4 remux', () => {
+  it('copies a silent video and refuses an input containing unexpected audio', async () => {
+    const video = await fixture('video');
+    const silent = await remuxTracks(video, null);
+    expect(silent.ok).toBe(true);
+    if (!silent.ok) throw Error(silent.error);
+    expect(await inspect(silent.value)).toEqual(await inspect(video));
+    const combined = await remuxTracks(video, await fixture('audio'));
+    if (!combined.ok) throw Error(combined.error);
+    expect(await remuxTracks(combined.value, null)).toEqual({ ok: false, error: 'invalid-tracks' });
+  });
   it('preserves a horizontal display flip instead of silently mirroring the picture', async () => {
     const source = new Input({ source: new BlobSource(await fixture('video')), formats: [MP4] });
     let transformed: Blob;

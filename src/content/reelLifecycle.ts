@@ -1,4 +1,5 @@
 import { reelIdentity } from '../providers/instagram/reelIdentity';
+import { isExplicitlySilent } from '../providers/instagram/silentReel';
 import { mediaUrl, plain, type TrackPair } from '../media/reelProtocol';
 import { fetchTrackPair } from '../media/trackFetch';
 import { remuxTracks } from '../media/remux';
@@ -14,6 +15,7 @@ export function createReelLifecycle(onChange: (view: SaveView) => void) {
   let operationId: string | null = null, blobUrl: string | null = null, disposed = false, polling = false;
   let controller: AbortController | null = null;
   let player: HTMLVideoElement | null = null, source = '';
+  let silent = false;
   const identity = reelIdentity(location.href);
   function visiblePlayers() {
     return [...document.querySelectorAll('video')].filter(video => {
@@ -27,7 +29,7 @@ export function createReelLifecycle(onChange: (view: SaveView) => void) {
     const current = reelIdentity(location.href), visible = visiblePlayers();
     return !disposed && !controller?.signal.aborted && identity.ok && current.ok &&
       current.value.publicationId === identity.value.publicationId && player?.isConnected &&
-      player.currentSrc === source && visible.length === 1 && visible[0] === player;
+      player.currentSrc === source && visible.length === 1 && visible[0] === player && (!silent || isExplicitlySilent(player));
   }
   const set = (patch: Partial<SaveView>) => { state = { ...state, ...patch }; if (!disposed) onChange(state); };
   async function send<T>(message: ReelMessage): Promise<Result<T>> {
@@ -67,11 +69,13 @@ export function createReelLifecycle(onChange: (view: SaveView) => void) {
         const data = event.data;
         if (plain(data, ['version', 'type', 'operationId', 'token', 'pair', 'playerSrc']) && data.version === 1 && data.type === 'ready' &&
           data.operationId === session.operationId && data.token === session.token &&
-          plain(data.pair, ['videoUrl', 'audioUrl']) && mediaUrl(data.pair.videoUrl) && mediaUrl(data.pair.audioUrl)) {
+          plain(data.pair, ['videoUrl', 'audioUrl']) && mediaUrl(data.pair.videoUrl) && (data.pair.audioUrl === null || mediaUrl(data.pair.audioUrl))) {
           const visible = visiblePlayers();
           if (visible.length !== 1 || !visible[0].currentSrc || visible[0].currentSrc !== data.playerSrc ||
             (player && (player !== visible[0] || source !== data.playerSrc))) { finish(); return; }
           player = visible[0]; source = player.currentSrc;
+          silent = data.pair.audioUrl === null;
+          if (silent && !isExplicitlySilent(player)) { finish(); return; }
           finish(data.pair as TrackPair);
         }
         else if (plain(data, ['version', 'type', 'operationId', 'token', 'error']) && data.version === 1 && data.type === 'failed' &&
@@ -93,11 +97,11 @@ export function createReelLifecycle(onChange: (view: SaveView) => void) {
     try {
       const pair = await capture(session, signal);
       if (signal.aborted || !validContext()) throw Error('context-changed');
-      set({ message: 'Получение видео и звука…' });
+      set({ message: silent ? 'Получение видео без звука…' : 'Получение видео и звука…' });
       const tracks = await fetchTrackPair(pair, signal);
       if (!tracks.ok || !validContext()) throw Error('fetch-failed');
-      set({ message: 'Объединение видео и звука…' });
-      const merged = await remuxTracks(tracks.value.video, tracks.value.audio, { signal, onProgress: value => set({ message: `Объединение: ${Math.round(value * 100)}%` }) });
+      set({ message: silent ? 'Сохранение видео без звука…' : 'Объединение видео и звука…' });
+      const merged = await remuxTracks(tracks.value.video, tracks.value.audio, { signal, onProgress: value => set({ message: `${silent ? 'Видео без звука' : 'Объединение'}: ${Math.round(value * 100)}%` }) });
       if (!merged.ok || signal.aborted || !validContext()) throw Error('remux-failed');
       const current = reelIdentity(location.href);
       if (!identity.ok || !current.ok || current.value.publicationId !== identity.value.publicationId) throw Error('route-changed');

@@ -1,4 +1,5 @@
 import { reelIdentity } from '../providers/instagram/reelIdentity';
+import { isExplicitlySilent } from '../providers/instagram/silentReel';
 import { mediaUrl, parseBridgeMessage } from './reelProtocol';
 import { createAssociationSession } from './trackAssociation';
 import type { ReelSession } from '../storage/reloadIntents';
@@ -82,7 +83,8 @@ export function installPageBridge(): { dispose(): void } {
     const media = candidates[0] && blobs.get(candidates[0].currentSrc)?.deref();
     const tracks = media ? sources.get(media) ?? [] : [];
     const video = tracks.filter(track => track.mime.startsWith('video/')), audio = tracks.filter(track => track.mime.startsWith('audio/'));
-    const result = active.capture.resolve(video.length === 1 ? video[0].key : '', audio.length === 1 ? audio[0].key : '');
+    const silent = tracks.length === 1 && video.length === 1 && !!candidates[0] && isExplicitlySilent(candidates[0]);
+    const result = active.capture.resolve(video.length === 1 ? video[0].key : '', audio.length === 1 ? audio[0].key : '', silent);
     if (result.ok) {
       const session = active.session;
       stop();

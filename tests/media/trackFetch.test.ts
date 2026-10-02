@@ -8,7 +8,7 @@ it('fetches both MP4 streams without credentials', async () => {
   const credentials: unknown[] = [];
   vi.stubGlobal('fetch', async (_url: string, options: RequestInit) => { credentials.push(options.credentials); return new Response(mp4, { headers: { 'Content-Type': 'video/mp4' } }); });
   const result = await fetchTrackPair(pair, new AbortController().signal);
-  expect(result.ok && result.value.video.size).toBe(16); expect(result.ok && result.value.audio.size).toBe(16);
+  expect(result.ok && result.value.video.size).toBe(16); expect(result.ok && result.value.audio?.size).toBe(16);
   expect(credentials).toEqual(['omit', 'omit']);
 });
 it.each([206, 403])('rejects incomplete/failed status %s', async status => {

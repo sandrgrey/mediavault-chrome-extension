@@ -3,20 +3,33 @@ import { resolve } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { BlobSource, Input, MP4 } from 'mediabunny';
 
-for (const scenario of ['success', 'cancel', 'navigate', 'spa-away', 'restart'] as const) test(`production Save: ${scenario}`, async ({ playwright }, testInfo) => {
+for (const scenario of ['success', 'silent', 'silent-unconfirmed', 'silent-label-lost', 'cancel', 'navigate', 'spa-away', 'restart'] as const) test(`production Save: ${scenario}`, async ({ playwright }, testInfo) => {
   const extension = resolve('dist');
   const context = await playwright.chromium.launchPersistentContext('', {
     channel: 'chromium', headless: true, acceptDownloads: true, downloadsPath: testInfo.outputPath('downloads'),
     args: [`--disable-extensions-except=${extension}`, `--load-extension=${extension}`],
   });
   let navigations = 0;
+  let mediaRequests = 0;
+  let fetching!: () => void, release!: () => void;
+  const fetchingPromise = new Promise<void>(resolve => { fetching = resolve; });
+  const releasePromise = new Promise<void>(resolve => { release = resolve; });
   try {
     await context.route('https://www.instagram.com/**', async route => {
-      if (route.request().isNavigationRequest()) navigations++;
-      await route.fulfill({ contentType: 'text/html', body: await readFile(resolve('tests/fixtures/reel.html')) });
+      if (route.request().isNavigationRequest()) { navigations++; mediaRequests = 0; }
+      let body = await readFile(resolve('tests/fixtures/reel.html'), 'utf8');
+      if (scenario.startsWith('silent')) {
+        body = body.replace(', [\'a\', \'audio/mp4; codecs="mp4a.40.2"\']', '');
+        const label = scenario === 'silent-unconfirmed' ? 'Audio is muted' : 'В видео нет звука';
+        body = body.replace('<video ', '<section><video ').replace('</video>', `</video><svg width="24" height="24" aria-label="${label}"></svg></section>`);
+      }
+      await route.fulfill({ contentType: 'text/html; charset=utf-8', body });
     });
     await context.route('https://scontent-lax7-1.cdninstagram.com/**', async route => {
       const kind = new URL(route.request().url()).pathname === '/v.mp4' ? 'video' : 'audio';
+      if (scenario === 'silent-label-lost' && ++mediaRequests === 2) {
+        fetching(); await releasePromise;
+      }
       await route.fulfill({ body: await readFile(resolve(`tests/fixtures/media/${kind}-mse.mp4`)), headers: { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'video/mp4' } });
     });
     const worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker');
@@ -30,7 +43,23 @@ for (const scenario of ['success', 'cancel', 'navigate', 'spa-away', 'restart'] 
     await expect(page.getByRole('button', { name: 'Save Reel' })).toBeVisible();
     expect(await inspect.evaluate(async () => (await chrome.downloads.search({})).length)).toBe(0);
     await page.getByRole('button', { name: 'Save Reel' }).click();
-    if (scenario !== 'success') {
+    if (scenario === 'silent-unconfirmed') {
+      await page.waitForTimeout(1800);
+      await expect(page.getByRole('status')).toHaveText('Сбор дорожек…');
+      expect(await inspect.evaluate(async () => (await chrome.downloads.search({})).length)).toBe(0);
+      await page.getByRole('button', { name: 'Отмена' }).click();
+      return;
+    }
+    if (scenario === 'silent-label-lost') {
+      await fetchingPromise;
+      await expect(page.getByRole('status')).toHaveText('Получение видео без звука…');
+      await page.locator('svg[aria-label="В видео нет звука"]').evaluate(element => element.removeAttribute('aria-label'));
+      release();
+      await expect(page.getByRole('status')).toHaveText('Не удалось однозначно получить дорожки Reel.');
+      expect(await inspect.evaluate(async () => (await chrome.downloads.search({})).length)).toBe(0);
+      return;
+    }
+    if (scenario !== 'success' && scenario !== 'silent') {
       await expect(page.getByRole('status')).toHaveText('Сбор дорожек…');
       if (scenario === 'cancel') {
         await page.getByRole('button', { name: 'Отмена' }).click();
@@ -65,7 +94,7 @@ for (const scenario of ['success', 'cancel', 'navigate', 'spa-away', 'restart'] 
     const saved = await inspect.evaluate(async () => (await chrome.downloads.search({})).map(d => ({ state: d.state, filename: d.filename })));
     expect(saved).toHaveLength(1); expect(saved[0].state).toBe('complete');
     const input = new Input({ source: new BlobSource(new Blob([await readFile(saved[0].filename)])), formats: [MP4] });
-    try { expect(await input.getTracks()).toHaveLength(2); } finally { input.dispose(); }
+    try { expect(await input.getTracks()).toHaveLength(scenario === 'silent' ? 1 : 2); } finally { input.dispose(); }
     const records = await inspect.evaluate(() => new Promise<Record<string, unknown[]>>((resolve, reject) => {
       const request = indexedDB.open('mediavault');
       request.onerror = () => reject(Error('database'));
@@ -78,5 +107,5 @@ for (const scenario of ['success', 'cancel', 'navigate', 'spa-away', 'restart'] 
     expect(records.operations).toHaveLength(1); expect(records.publications).toHaveLength(1);
     expect(JSON.stringify(records)).not.toMatch(/blob:|sig=|blobUrl|videoUrl|audioUrl|cookie/i);
     expect(pageErrors).toEqual([]);
-  } finally { await context.close(); }
+  } finally { release(); await context.close(); }
 });
